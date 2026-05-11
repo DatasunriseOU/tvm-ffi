@@ -440,6 +440,22 @@ def test_convert_func_raises_propagates() -> None:
     not _HAS_TORCH_DLPACK_API,
     reason="torch.Tensor.__dlpack_c_exchange_api__ not available",
 )
+def test_convert_func_tensor_cls_raises_propagates() -> None:
+    """A tensor callback argument conversion failure path preserves Python errors."""
+
+    def raises(tensor: Any) -> None:
+        assert isinstance(tensor, torch.Tensor)
+        raise ValueError(f"tensor boom {tuple(tensor.shape)}")
+
+    f = tvm_ffi.convert_func(raises, tensor_cls=torch.Tensor)
+    with pytest.raises(ValueError, match=r"tensor boom \(3,\)"):
+        f(torch.zeros(3))
+
+
+@pytest.mark.skipif(
+    not _HAS_TORCH_DLPACK_API,
+    reason="torch.Tensor.__dlpack_c_exchange_api__ not available",
+)
 def test_convert_func_with_torch_tensor_cls() -> None:
     """tensor_cls=torch.Tensor delivers torch.Tensor instances to the callback.
 
