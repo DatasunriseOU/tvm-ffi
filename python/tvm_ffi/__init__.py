@@ -20,7 +20,40 @@
 # isort: skip_file
 
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
+
+
+def _extend_dev_core_path() -> None:
+    """Make source-tree imports find the locally built ``core`` extension.
+
+    In a dev checkout the Python package lives under ``python/tvm_ffi`` while
+    CMake leaves ``core.abi3.so`` under ``build/``.  Importing the source tree
+    ahead of site-packages is the right thing for local TVM/TileLang work, but
+    without this path entry ``from . import core`` fails during package init and
+    Python reports it as a circular import.
+    """
+
+    package_path = globals().get("__path__")
+    if package_path is None:
+        return
+    try:
+        source_dir = Path(__file__).resolve().parent
+        dev_core_dir = source_dir.parent.parent / "build"
+    except OSError:
+        return
+    if not any(dev_core_dir.glob("core*.so")):
+        return
+    source_value = str(source_dir)
+    core_value = str(dev_core_dir)
+    reordered = [source_value, core_value]
+    reordered.extend(
+        value for value in package_path if value not in {source_value, core_value}
+    )
+    package_path[:] = reordered
+
+
+_extend_dev_core_path()
 
 
 def _is_config_mode() -> bool:
