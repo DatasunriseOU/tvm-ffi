@@ -19,9 +19,23 @@
 # order matters here so we need to skip isort here
 # isort: skip_file
 
+import importlib.machinery
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+
+def _dev_core_extension_path() -> Path | None:
+    try:
+        source_dir = Path(__file__).resolve().parent
+        dev_core_dir = source_dir.parent.parent / "build"
+    except OSError:
+        return None
+    for suffix in importlib.machinery.EXTENSION_SUFFIXES:
+        candidate = dev_core_dir / f"core{suffix}"
+        if candidate.is_file():
+            return candidate
+    return next(iter(sorted(dev_core_dir.glob("core*.so"))), None)
 
 
 def _extend_dev_core_path() -> None:
@@ -39,11 +53,12 @@ def _extend_dev_core_path() -> None:
         return
     try:
         source_dir = Path(__file__).resolve().parent
-        dev_core_dir = source_dir.parent.parent / "build"
     except OSError:
         return
-    if not any(dev_core_dir.glob("core*.so")):
+    core_path = _dev_core_extension_path()
+    if core_path is None:
         return
+    dev_core_dir = core_path.parent
     source_value = str(source_dir)
     core_value = str(dev_core_dir)
     reordered = [source_value, core_value]
@@ -53,7 +68,31 @@ def _extend_dev_core_path() -> None:
     package_path[:] = reordered
 
 
+def _redirect_editable_core_to_dev_build() -> None:
+    """Avoid editable-install meta finders mixing source Python with wheel core."""
+
+    core_path = _dev_core_extension_path()
+    if core_path is None:
+        return
+    try:
+        init_path = str(Path(__file__).resolve())
+    except OSError:
+        return
+    for finder in sys.meta_path:
+        known_source_files = getattr(finder, "known_source_files", None)
+        known_wheel_files = getattr(finder, "known_wheel_files", None)
+        if not isinstance(known_source_files, dict) or not isinstance(
+            known_wheel_files, dict
+        ):
+            continue
+        if known_source_files.get("tvm_ffi") != init_path:
+            continue
+        known_source_files.pop("tvm_ffi.core", None)
+        known_wheel_files["tvm_ffi.core"] = str(core_path)
+
+
 _extend_dev_core_path()
+_redirect_editable_core_to_dev_build()
 
 
 def _is_config_mode() -> bool:

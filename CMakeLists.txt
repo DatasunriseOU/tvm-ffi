@@ -266,14 +266,18 @@ if (TVM_FFI_BUILD_PYTHON_MODULE)
     OUTPUT ${_core_cpp}
     COMMAND ${Python_EXECUTABLE} -m cython --cplus ${_core_pyx} -o ${_core_cpp} --module-name
             "tvm_ffi.core"
+    COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/PatchCythonTraceback.py
+            ${_core_cpp}
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMENT "Transpiling ${_core_pyx} to ${_core_cpp}"
-    DEPENDS ${_cython_sources}
+    DEPENDS ${_cython_sources} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/PatchCythonTraceback.py
     VERBATIM
   )
 
-  if (Python_VERSION VERSION_GREATER_EQUAL "3.12" AND NOT PYTHON_IS_FREE_THREADED)
-    # >= Python3.12, use Use_SABI version
+  if (Python_VERSION VERSION_GREATER_EQUAL "3.12" AND Python_VERSION VERSION_LESS "3.13" AND NOT PYTHON_IS_FREE_THREADED)
+    # Python 3.12 uses the stable ABI build.  On Python 3.13, Cython's
+    # limited-API traceback shim can hand PyTraceBack_Here an invalid frame,
+    # crashing while reporting normal FFI errors, so use a native SOABI module.
     python_add_library(tvm_ffi_cython MODULE "${_core_cpp}" USE_SABI 3.12)
     target_link_libraries(tvm_ffi_cython PRIVATE Python::SABIModule)
     set_target_properties(tvm_ffi_cython PROPERTIES OUTPUT_NAME "core")
@@ -282,7 +286,7 @@ if (TVM_FFI_BUILD_PYTHON_MODULE)
       set_target_properties(tvm_ffi_cython PROPERTIES SUFFIX ".abi3.so")
     endif ()
   else ()
-    # before Python3.12, use WITH_SOABI version
+    # before Python3.12, free-threaded Python, and Python3.13+ use WITH_SOABI version
     python_add_library(tvm_ffi_cython MODULE "${_core_cpp}" WITH_SOABI)
     set_target_properties(tvm_ffi_cython PROPERTIES OUTPUT_NAME "core")
   endif ()

@@ -276,6 +276,32 @@ def _find_library_by_basename(  # noqa: PLR0912
     else:  # Linux, FreeBSD, etc
         lib_dll_names = (f"lib{target_name}.so",)
 
+    def _find_in_dirs(dll_paths: list[Path]) -> Path | None:
+        for dll_dir in dll_paths:
+            for lib_dll_name in lib_dll_names:
+                try:
+                    path = (dll_dir / lib_dll_name).resolve()
+                    if path.is_file():
+                        return path
+                except OSError:
+                    continue
+        return None
+
+    # Caller-supplied dirs are the strongest signal and must override both
+    # editable and installed package metadata.
+    if extra_lib_paths is not None:
+        if path := _find_in_dirs(extra_lib_paths):
+            return path
+
+    dev_dll_paths = [
+        _rel_top_directory() / "build" / "lib",
+        _rel_top_directory() / "lib",
+        _dev_top_directory() / "build" / "lib",
+        _dev_top_directory() / "lib",
+    ]
+    if path := _find_in_dirs(dev_dll_paths):
+        return path
+
     # Use `importlib.metadata` is the most reliable way to find package data files
     try:
         dist: im.PathDistribution = im.distribution(package)  # ty: ignore[invalid-assignment]
@@ -298,23 +324,10 @@ def _find_library_by_basename(  # noqa: PLR0912
     # e.g. Use PYTHONPATH to point to dev package, and CMake + Makefiles to build the shared library.
     dll_paths: list[Path] = []
 
-    # Case 1. Caller-supplied directories take precedence — these let a foreign
-    # caller (e.g. ``package="tvm"``) point at its own build tree without
-    # relying on ``tvm_ffi``'s file location.
-    if extra_lib_paths is not None:
-        dll_paths.extend(extra_lib_paths)
+    # Case 1. Built-in self-anchored fallback (back-compat for the self-call).
+    dll_paths.extend(dev_dll_paths)
 
-    # Case 2. Built-in self-anchored fallback (back-compat for the self-call).
-    dll_paths.extend(
-        [
-            _rel_top_directory() / "build" / "lib",
-            _rel_top_directory() / "lib",
-            _dev_top_directory() / "build" / "lib",
-            _dev_top_directory() / "lib",
-        ]
-    )
-
-    # Case 3. PATH-related environment variables.
+    # Case 2. PATH-related environment variables.
     if sys.platform.startswith("win32"):
         dll_paths.extend(Path(p) for p in _split_env_var("PATH", ";"))
     elif sys.platform.startswith("darwin"):
@@ -324,15 +337,8 @@ def _find_library_by_basename(  # noqa: PLR0912
         dll_paths.extend(Path(p) for p in _split_env_var("LD_LIBRARY_PATH", ":"))
         dll_paths.extend(Path(p) for p in _split_env_var("PATH", ":"))
 
-    # Search for the library in candidate directories
-    for dll_dir in dll_paths:
-        for lib_dll_name in lib_dll_names:
-            try:
-                path = (dll_dir / lib_dll_name).resolve()
-                if path.is_file():
-                    return path
-            except OSError:
-                continue
+    if path := _find_in_dirs(dll_paths):
+        return path
     raise RuntimeError(
         f"Cannot find library {', '.join(lib_dll_names)}; "
         f"searched directories:\n  " + "\n  ".join(str(p) for p in dll_paths)
