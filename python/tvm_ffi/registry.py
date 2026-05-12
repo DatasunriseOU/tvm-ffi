@@ -399,6 +399,10 @@ def _install_init(cls: type, type_info: TypeInfo) -> None:
 def _add_class_attrs(type_cls: type, type_info: TypeInfo) -> type:
     for field in type_info.fields:
         name = field.name
+        if name.startswith("__") and name.endswith("__"):
+            # Python owns dunder descriptors such as __dict__; reflected C++
+            # fields must not overwrite them with generated properties.
+            continue
         if name not in type_cls.__dict__:  # skip attributes defined directly on this class
             setattr(type_cls, name, field.as_property(type_cls))
     has_ffi_init = False

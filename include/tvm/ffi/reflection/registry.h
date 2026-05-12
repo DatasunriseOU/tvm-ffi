@@ -223,6 +223,13 @@ class AttachFieldFlag : public InfoTrait {
     return AttachFieldFlag(kTVMFFIFieldFlagBitMaskSEqHashDefRecursive);
   }
   /*!
+   * \brief Backward-compatible alias for callers written before recursive and
+   * non-recursive structural-equality def regions were split.
+   */
+  TVM_FFI_INLINE static AttachFieldFlag SEqHashDef() {
+    return SEqHashDefRecursive();
+  }
+  /*!
    * \brief Attach kTVMFFIFieldFlagBitMaskSEqHashDefNonRecursive
    *
    * The field enters a non-recursive def region: only the immediate free
