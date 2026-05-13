@@ -237,8 +237,9 @@ build-verbosity = 1
 # ship 314t threaded nogil version
 build = ["cp38-*", "cp39-*", "cp310-*", "cp311-*", "cp312-*", "cp314t-*"]
 skip = ["*musllinux*"]
-# we only need to test on cp312
-test-skip = ["cp38-*", "cp39-*", "cp310-*", "cp311-*"]
+# we only need to test on cp312; cp314t (free-threaded) is built but not
+# yet tested — the codebase is not free-threaded-safe (pytest segfaults).
+test-skip = ["cp38-*", "cp39-*", "cp310-*", "cp311-*", "cp314t-*"]
 # focus on testing abi3 wheel
 build-frontend = "build[uv]"
 test-command = "pytest {package}/tests/python -vvs"
