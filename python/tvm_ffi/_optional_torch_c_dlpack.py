@@ -90,6 +90,9 @@ def _check_and_update_dlpack_c_exchange_api(tensor_cls: object) -> bool:
 
 
 def load_torch_c_dlpack_extension() -> Any:  # noqa: PLR0912, PLR0915
+    if os.environ.get("TVM_FFI_DISABLE_TORCH_C_DLPACK", "0") != "0":
+        return None
+
     try:
         import torch  # noqa: PLC0415
         import torch.version  # noqa: PLC0415

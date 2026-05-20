@@ -16,6 +16,7 @@
 # under the License.
 
 import ctypes
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -85,6 +86,17 @@ def test_parallel_build() -> None:
         assert p.returncode == 0
     lib_path = str(Path(f"{output_dir}/{libname}").resolve())
     assert Path(lib_path).exists()
+
+
+def test_load_torch_c_dlpack_extension_honors_disable_env() -> None:
+    env = dict(os.environ)
+    env["TVM_FFI_DISABLE_TORCH_C_DLPACK"] = "1"
+    script = """
+from tvm_ffi._optional_torch_c_dlpack import load_torch_c_dlpack_extension
+assert load_torch_c_dlpack_extension() is None
+"""
+
+    subprocess.run([sys.executable, "-c", script], check=True, env=env)
 
 
 if __name__ == "__main__":
