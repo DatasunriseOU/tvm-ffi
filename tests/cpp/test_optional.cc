@@ -64,6 +64,13 @@ TEST(Optional, StorageEnabledPassThrough) {
   EXPECT_EQ(back.value().value(), 7);
 }
 
+TEST(Optional, DefinedCompatibility) {
+  Optional<int> value = 7;
+  Optional<TensorView> view;
+  EXPECT_TRUE(value.defined());
+  EXPECT_FALSE(view.defined());
+}
+
 TEST(Optional, TInt) {
   Optional<TInt> x;
   Optional<TInt> y = TInt(11);
