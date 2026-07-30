@@ -232,6 +232,7 @@ class AttachFieldFlag : public InfoTrait {
   TVM_FFI_INLINE static AttachFieldFlag SEqHashDefRecursive() {
     return AttachFieldFlag(kTVMFFIFieldFlagBitMaskSEqHashDefRecursive);
   }
+  /*! \brief Compatibility alias for SEqHashDefRecursive. */
   TVM_FFI_INLINE static AttachFieldFlag SEqHashDef() { return SEqHashDefRecursive(); }
   /*!
    * \brief Attach kTVMFFIFieldFlagBitMaskSEqHashDefNonRecursive
