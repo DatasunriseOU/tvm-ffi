@@ -71,6 +71,13 @@ TEST(Optional, DefinedCompatibility) {
   EXPECT_FALSE(view.defined());
 }
 
+TEST(Optional, ObjectRefGetCompatibility) {
+  Optional<TInt> empty;
+  Optional<TInt> value = TInt(11);
+  EXPECT_EQ(empty.get(), nullptr);
+  EXPECT_EQ(value.get(), value.value().get());
+}
+
 TEST(Optional, TInt) {
   Optional<TInt> x;
   Optional<TInt> y = TInt(11);

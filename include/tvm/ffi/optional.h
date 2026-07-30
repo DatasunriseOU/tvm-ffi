@@ -229,6 +229,15 @@ class Optional<T, std::enable_if_t<TypeTraits<T>::storage_enabled>> {
   TVM_FFI_INLINE bool defined() const noexcept { return has_value(); }
 
   /*!
+   * \brief Return the contained ObjectRef's raw object pointer.
+   * \note This compatibility accessor is available only for ObjectRef types.
+   */
+  template <typename U = T, typename = std::enable_if_t<std::is_base_of_v<ObjectRef, U>>>
+  TVM_FFI_INLINE const typename U::ContainerType* get() const {
+    return has_value() ? operator*().get() : nullptr;
+  }
+
+  /*!
    * \brief Try to reinterpret the stored value as a type U (strict, no conversion).
    * \tparam U The type to reinterpret to.
    * \return std::optional<U> for ObjectRef-like U, or const U* when U is an Object type.
