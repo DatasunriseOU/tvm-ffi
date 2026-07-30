@@ -78,6 +78,28 @@ TEST(Optional, ObjectRefGetCompatibility) {
   EXPECT_EQ(value.get(), value.value().get());
 }
 
+TEST(Optional, ObjectRefLegacySurfaceCompatibility) {
+  Optional<TInt> value = TInt(11);
+
+  EXPECT_EQ(value->value, 11);
+}
+
+TEST(Optional, ObjectRefUpcastCompatibility) {
+  Optional<TInt> value = TInt(11);
+  Optional<TInt> empty;
+
+  Optional<ObjectRef> copied = value;
+  Optional<ObjectRef> moved = Optional<TInt>(TInt(12));
+  EXPECT_TRUE(copied.has_value());
+  EXPECT_TRUE(copied.value().same_as(value.value()));
+  EXPECT_EQ(moved.value().as_or_throw<TInt>()->value, 12);
+
+  copied = empty;
+  EXPECT_FALSE(copied.has_value());
+  copied = Optional<TInt>(TInt(13));
+  EXPECT_EQ(copied.value().as_or_throw<TInt>()->value, 13);
+}
+
 TEST(Optional, TInt) {
   Optional<TInt> x;
   Optional<TInt> y = TInt(11);
