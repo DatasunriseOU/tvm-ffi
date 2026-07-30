@@ -15,8 +15,8 @@
     specific language governing permissions and limitations
     under the License.
 
-Structural Equality and Hashing
-===============================
+Structural Equality, Hashing, and Walk
+======================================
 
 TVM FFI provides ``structural_equal`` and ``structural_hash`` for the
 object graph. These compare objects by **content** — recursively walking
@@ -50,13 +50,18 @@ Type-Level Annotation
 ---------------------
 
 The ``structural_eq`` parameter on ``@py_class`` declares how instances of the
-type participate in structural equality and hashing:
+type participate in structural equality and hashing. It defaults to ``"tree"``,
+so the following class is compared recursively by its fields:
 
 .. code-block:: python
 
-   @py_class(structural_eq="tree")
+   @py_class
    class Expr(Object):
        ...
+
+Specify ``structural_eq`` only when the type needs another role, such as
+``"var"``, ``"dag"``, or ``"singleton"``, or pass ``None`` explicitly to opt
+out of structural equality and hashing.
 
 Quick reference
 ~~~~~~~~~~~~~~~
@@ -70,7 +75,7 @@ Quick reference
      - Use when...
    * - ``"tree"``
      - A regular IR node
-     - Default for most IR nodes
+     - Default for ``@py_class`` and most IR nodes
    * - ``"const-tree"``
      - An immutable value node (with pointer shortcut)
      - The type has no transitive ``"var"`` children
@@ -85,7 +90,7 @@ Quick reference
      - Exactly one instance per logical identity (e.g. registry entries)
    * - ``None``
      - Not comparable
-     - The type should never be compared structurally
+     - Explicitly opt out of structural comparison
 
 
 ``"tree"`` — The Default
@@ -93,7 +98,7 @@ Quick reference
 
 .. code-block:: python
 
-   @py_class(structural_eq="tree")
+   @py_class
    class Add(Object):
        lhs: Expr
        rhs: Expr
@@ -580,6 +585,12 @@ identity. Pointer equality is the only valid comparison."
 No content comparison is ever performed. Different pointers are always
 unequal; same pointer is always equal.
 
+The :class:`~tvm_ffi.dataclasses.Enum` hierarchy always uses this kind by
+default. This includes :class:`~tvm_ffi.dataclasses.IntEnum`,
+:class:`~tvm_ffi.dataclasses.StrEnum`, and every subclass of these enum bases.
+Each registered enum variant is therefore structurally equal only to that same
+singleton variant.
+
 .. code-block:: python
 
    op_conv = Op.get("nn.conv2d")
@@ -877,7 +888,7 @@ When defining a new type:
 .. mermaid::
 
    graph TD
-       Start["New @py_class type"] --> Q1{"Singleton?<br/>(one instance per<br/>logical identity)"}
+       Start["New non-enum @py_class type"] --> Q1{"Singleton?<br/>(one instance per<br/>logical identity)"}
        Q1 -->|Yes| UI["structural_eq=&quot;singleton&quot;"]
        Q1 -->|No| Q2{"Represents a<br/>variable binding?"}
        Q2 -->|Yes| FV["structural_eq=&quot;var&quot;"]
@@ -892,6 +903,9 @@ When defining a new type:
        style DN fill:#cce5ff
        style CTN fill:#d4edda
        style TN fill:#d4edda
+
+Enum types do not need this decision process: :class:`~tvm_ffi.dataclasses.Enum`
+and all of its subclasses default to ``"singleton"``.
 
 For fields:
 
@@ -955,3 +969,187 @@ And in Python:
 
    assert structural_equal(f1, f2)                   # alpha-equivalent
    assert structural_hash(f1) == structural_hash(f2)  # same hash
+
+
+Structural Walk and Visit
+-------------------------
+
+``structural_equal`` and ``structural_hash`` are built on a structural traversal
+of the value graph.  ``structural_walk`` exposes that traversal directly: it
+visits containers, object fields, and POD leaves, and invokes user callbacks for
+values whose runtime type matches a callback entry.
+
+It is useful when you want to collect information, validate a tree, find a node, or
+stop traversal early without writing a custom equality/hash hook.
+
+Basic Walk
+~~~~~~~~~~
+
+Pass callbacks as ordered ``(type, callback)`` entries.  The first matching
+entry runs for each visited value.  Normal Python callbacks receive one
+argument, ``value``.
+
+.. code-block:: python
+
+   import tvm_ffi
+
+   visited = []
+
+   def on_int(value):
+       visited.append(value)
+       if value == 0:
+           return tvm_ffi.VisitInterrupt(value)
+       return tvm_ffi.WalkResult.ADVANCE
+
+   result = tvm_ffi.structural_walk(root, (int, on_int), order="pre")
+
+   if result is not None:
+       print("stopped at", result.value)
+
+Callbacks may return:
+
+- ``WalkResult.ADVANCE`` to continue into children.
+- ``WalkResult.SKIP`` to skip the current value's children.
+- ``VisitInterrupt(payload)`` to stop the entire walk and return an interrupt
+  carrying ``payload``.
+- ``None`` as shorthand for ``WalkResult.ADVANCE``.
+
+Grouped Types
+~~~~~~~~~~~~~
+
+Several types can share one callback by passing a tuple of types:
+
+.. code-block:: python
+
+   numbers = []
+   strings = []
+
+   tvm_ffi.structural_walk(
+       root,
+       [
+           ((int, float), lambda value: numbers.append(value)),
+           (str, lambda value: strings.append(value)),
+       ],
+   )
+
+This is normalized as if the same callback had been registered separately for
+``int`` and ``float``.  Callback entries are still tried in order, so broad
+callbacks should usually come after more specific ones.
+
+Catch-All and Object Callbacks
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``object`` and ``typing.Any`` are catch-all callbacks.  They match POD leaves
+and object-backed values.
+
+.. code-block:: python
+
+   from typing import Any
+
+   seen = []
+   tvm_ffi.structural_walk(root, (Any, lambda value: seen.append(value)))
+
+``tvm_ffi.Object`` is different: it matches only object-backed FFI values, such
+as ``Array``, ``Map``, ``Function``, ``String`` objects, or registered object
+classes.  It does not match POD leaves such as ``int`` or ``float``.
+
+.. code-block:: python
+
+   objects = []
+   leaves = []
+
+   tvm_ffi.structural_walk(
+       root,
+       [
+           (tvm_ffi.Object, lambda value: objects.append(value)),
+           (object, lambda value: leaves.append(value)),
+       ],
+   )
+
+Def-Region Aware Walk
+~~~~~~~~~~~~~~~~~~~~~
+
+Callbacks passed to ``with_def_region_kind`` receive a second argument that
+reports whether the current value is visited as a definition or a use.  This is
+useful for analyses such as collecting variable uses while skipping binders:
+
+.. code-block:: python
+
+   uses = []
+
+   tvm_ffi.structural_walk(
+       func,
+       with_def_region_kind=(
+           Var,
+           lambda var, kind: (
+               uses.append(var) if kind == tvm_ffi.DefRegionKind.NONE else None
+           ),
+       ),
+   )
+
+For a function node, parameters are visited in a definition region, while
+occurrences in the body are visited with ``DefRegionKind.NONE``.
+
+Traversal Order
+~~~~~~~~~~~~~~~
+
+The default order is pre-order: callbacks run before visiting children.
+Post-order callbacks run after children.
+
+.. code-block:: python
+
+   trace = []
+
+   tvm_ffi.structural_walk(
+       tvm_ffi.Array([tvm_ffi.Array([1]), 2]),
+       [
+           (tvm_ffi.Array, lambda value: trace.append(f"array:{len(value)}")),
+           (int, lambda value: trace.append(f"int:{value}")),
+       ],
+       order="post",
+   )
+
+   assert trace == ["int:1", "array:1", "int:2", "array:2"]
+
+C++ Walk
+~~~~~~~~
+
+C++ code can use ``StructuralWalk`` with typed callbacks.  Callbacks are tried
+in order and dispatch on the first argument type:
+
+.. code-block:: cpp
+
+   Optional<VisitInterrupt> result = StructuralWalk<WalkOrder::kPreOrder>(
+       root,
+       [&](const Add& add) -> Expected<WalkResult> {
+         ++num_adds;
+         return WalkResult::Advance();
+       },
+       [&](const Mul& mul) -> Expected<WalkResult> {
+         return WalkResult::Skip();
+       });
+
+C++ callbacks dispatch on their first argument, which may be ``AnyView``,
+``Any``, an ``ObjectRef`` subclass, an ``Object`` pointer type, or another
+FFI-convertible POD type.  They may also take an optional second
+``TVMFFIDefRegionKind`` argument to distinguish definition sites from uses.
+Errors should be returned as ``Expected<WalkResult>``.
+
+Low-Level ``StructuralVisitor``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``StructuralVisitor`` is the lower-level traversal object.  It is mainly useful
+inside structural visit hooks or C++ integrations that need to participate in
+the same recursive traversal protocol.
+
+Python users normally call ``structural_walk`` instead.  The low-level visitor
+API exposes:
+
+- ``visitor.visit(value)`` to recursively visit a child value.
+- ``visitor.def_region_kind()`` to inspect the current definition-region mode.
+- ``visitor.with_def_region_kind(kind, callback)`` to run a recursive visit
+  under a temporary definition-region mode.
+
+Custom visit hooks are registered as the ``__s_visit__`` type attribute.  They
+receive the active visitor and the current object, and are responsible for
+calling ``visitor.visit(child)`` on structural children.

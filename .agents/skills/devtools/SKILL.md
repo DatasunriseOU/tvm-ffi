@@ -1,20 +1,3 @@
-<!--- Licensed to the Apache Software Foundation (ASF) under one -->
-<!--- or more contributor license agreements.  See the NOTICE file -->
-<!--- distributed with this work for additional information -->
-<!--- regarding copyright ownership.  The ASF licenses this file -->
-<!--- to you under the Apache License, Version 2.0 (the -->
-<!--- "License"); you may not use this file except in compliance -->
-<!--- with the License.  You may obtain a copy of the License at -->
-
-<!---   http://www.apache.org/licenses/LICENSE-2.0 -->
-
-<!--- Unless required by applicable law or agreed to in writing, -->
-<!--- software distributed under the License is distributed on an -->
-<!--- "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY -->
-<!--- KIND, either express or implied.  See the License for the -->
-<!--- specific language governing permissions and limitations -->
-<!--- under the License. -->
-
 ---
 name: devtools
 description: Developer reference for Apache TVM-FFI.
@@ -29,7 +12,7 @@ Condensed reference from `docs/dev/`. Use this when working on the TVM-FFI codeb
 
 - **Python**: 3.9+ (managed via `uv`; default virtualenv at `.venv`)
 - **Compiler**: C++17-capable toolchain (GCC/Clang on Linux, Apple Clang on macOS, MSVC on Windows)
-- **Build tools**: CMake 3.18+, Ninja
+- **Build tools**: CMake 3.26+, Ninja
 - **Source**: Always clone with `--recursive`, or run `git submodule update --init --recursive`
 
 All Python-related commands below use [`uv`](https://docs.astral.sh/uv/). The default virtual environment is `.venv` in the repo root.

@@ -19,80 +19,8 @@
 # order matters here so we need to skip isort here
 # isort: skip_file
 
-import importlib.machinery
 import sys
-from pathlib import Path
 from typing import TYPE_CHECKING
-
-
-def _dev_core_extension_path() -> Path | None:
-    try:
-        source_dir = Path(__file__).resolve().parent
-        dev_core_dir = source_dir.parent.parent / "build"
-    except OSError:
-        return None
-    for suffix in importlib.machinery.EXTENSION_SUFFIXES:
-        candidate = dev_core_dir / f"core{suffix}"
-        if candidate.is_file():
-            return candidate
-    return next(iter(sorted(dev_core_dir.glob("core*.so"))), None)
-
-
-def _extend_dev_core_path() -> None:
-    """Make source-tree imports find the locally built ``core`` extension.
-
-    In a dev checkout the Python package lives under ``python/tvm_ffi`` while
-    CMake leaves ``core.abi3.so`` under ``build/``.  Importing the source tree
-    ahead of site-packages is the right thing for local TVM/TileLang work, but
-    without this path entry ``from . import core`` fails during package init and
-    Python reports it as a circular import.
-    """
-
-    package_path = globals().get("__path__")
-    if package_path is None:
-        return
-    try:
-        source_dir = Path(__file__).resolve().parent
-    except OSError:
-        return
-    core_path = _dev_core_extension_path()
-    if core_path is None:
-        return
-    dev_core_dir = core_path.parent
-    source_value = str(source_dir)
-    core_value = str(dev_core_dir)
-    reordered = [source_value, core_value]
-    reordered.extend(
-        value for value in package_path if value not in {source_value, core_value}
-    )
-    package_path[:] = reordered
-
-
-def _redirect_editable_core_to_dev_build() -> None:
-    """Avoid editable-install meta finders mixing source Python with wheel core."""
-
-    core_path = _dev_core_extension_path()
-    if core_path is None:
-        return
-    try:
-        init_path = str(Path(__file__).resolve())
-    except OSError:
-        return
-    for finder in sys.meta_path:
-        known_source_files = getattr(finder, "known_source_files", None)
-        known_wheel_files = getattr(finder, "known_wheel_files", None)
-        if not isinstance(known_source_files, dict) or not isinstance(
-            known_wheel_files, dict
-        ):
-            continue
-        if known_source_files.get("tvm_ffi") != init_path:
-            continue
-        known_source_files.pop("tvm_ffi.core", None)
-        known_wheel_files["tvm_ffi.core"] = str(core_path)
-
-
-_extend_dev_core_path()
-_redirect_editable_core_to_dev_build()
 
 
 def _is_config_mode() -> bool:
@@ -148,10 +76,16 @@ if TYPE_CHECKING or not _is_config_mode():
     from .module import Module, system_lib, load_module
     from .stream import StreamContext, get_raw_stream, use_raw_stream, use_torch_stream
     from .structural import (
+        DefRegionKind,
         StructuralKey,
+        StructuralVisitor,
+        VisitInterrupt,
+        WalkOrder,
+        WalkResult,
         get_first_structural_mismatch,
         structural_equal,
         structural_hash,
+        structural_walk,
     )
     from . import serialization
     from . import access_path
@@ -177,11 +111,17 @@ if TYPE_CHECKING or not _is_config_mode():
         float32,
         float16,
         bfloat16,
+        float8_e3m4,
+        float8_e4m3,
+        float8_e4m3b11fnuz,
         float8_e4m3fn,
         float8_e4m3fnuz,
         float8_e5m2,
         float8_e5m2fnuz,
         float8_e8m0fnu,
+        float6_e2m3fn,
+        float6_e3m2fn,
+        float4_e2m1fn,
         float4_e2m1fnx2,
     )
 elif sys.platform.startswith("win32"):
@@ -202,6 +142,7 @@ __all__ = [
     "LIB",
     "Array",
     "DLDeviceType",
+    "DefRegionKind",
     "Device",
     "Dict",
     "Function",
@@ -213,7 +154,11 @@ __all__ = [
     "Shape",
     "StreamContext",
     "StructuralKey",
+    "StructuralVisitor",
     "Tensor",
+    "VisitInterrupt",
+    "WalkOrder",
+    "WalkResult",
     "__version__",
     "__version_tuple__",
     "access_path",
@@ -239,6 +184,7 @@ __all__ = [
     "structural",
     "structural_equal",
     "structural_hash",
+    "structural_walk",
     "system_lib",
     "use_raw_stream",
     "use_torch_stream",

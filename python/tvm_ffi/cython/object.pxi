@@ -103,9 +103,8 @@ cdef class CObject:
         self.chandle = NULL
 
     def __dealloc__(self):
-        if self.chandle != NULL:
-            CHECK_CALL(TVMFFIObjectDecRef(self.chandle))
-            self.chandle = NULL
+        # Release the wrapper's +1 on the chandle and inactivate-or-free its allocation.
+        TVMFFIPyTpDealloc(<void**>&self.chandle, <PyObject*>self)
 
     def __ctypes_handle__(self) -> object:
         return ctypes_handle(self.chandle)
@@ -173,7 +172,14 @@ cdef class CObject:
         return isinstance(other, CObject) and self.chandle == (<CObject>other).chandle
 
     def __move_handle_from__(self, other: CObject) -> None:
-        self.chandle = (<CObject>other).chandle
+        cdef void* chandle = (<CObject>other).chandle
+        self.chandle = chandle
+        # Rebind the canonical binding other -> self BEFORE nulling other.chandle. The reverse
+        # order leaves a window (free-threaded) where the word still publishes Active(other) while
+        # other.chandle is already NULL: a concurrent make_ret Active-hit would then hand out a
+        # canonical wrapper with a NULL handle. After the rebind the word points at self (whose
+        # chandle is already set), so nulling other.chandle is safe.
+        TVMFFIPyCompareAndRebindPyObject(chandle, <PyObject*>other, <PyObject*>self)
         (<CObject>other).chandle = NULL
 
     def __init_handle_by_constructor__(self, fconstructor: Any, *args: Any) -> None:
@@ -183,6 +189,8 @@ cdef class CObject:
         ConstructorCall(
             (<CObject>fconstructor).chandle, <PyObject*>args, &chandle, NULL)
         self.chandle = chandle
+        # Attach self as the canonical wrapper iff the chandle is Detached (expect=NULL).
+        TVMFFIPyCompareAndRebindPyObject(chandle, NULL, <PyObject*>self)
 
 
 cdef class CContainerBase(CObject):
@@ -432,6 +440,11 @@ cdef inline object make_ret_opaque_object(TVMFFIAny result):
     (<CObject>obj).chandle = result.v_obj
     return obj.pyobject()
 
+cdef public void** TVMFFICyObjectGetCHandlePtr(PyObject* ptr) noexcept:
+    # Address of a CObject wrapper's ``chandle`` field, for the C++ helpers.
+    return &((<CObject>ptr).chandle)
+
+
 cdef inline object make_fallback_cls_for_type_index(int32_t type_index):
     cdef str type_key = _type_index_to_key(type_index)
     cdef object type_info = _lookup_or_register_type_info_from_type_key(type_key)
@@ -469,23 +482,29 @@ cdef inline object make_fallback_cls_for_type_index(int32_t type_index):
 
 
 cdef inline object make_ret_object(TVMFFIAny result):
-    cdef int32_t type_index
+    """Wrap a returned chandle into its canonical Python wrapper.
+
+    Caller must own +1 on ``result.v_obj``; ownership transfers to the
+    returned wrapper. The Active / Inactive / Detached transition is owned in
+    one frame by ``TVMFFIPyMakeRetObject`` (tvm_ffi_python_object.h); this
+    dispatcher only resolves ``cls`` and peels off the value-typed
+    ``PyNativeObject`` case, which does not participate in tying.
+    """
+    cdef int32_t type_index = result.type_index
     cdef object cls, obj
-    type_index = result.type_index
 
     if type_index < len(TYPE_INDEX_TO_CLS) and (cls := TYPE_INDEX_TO_CLS[type_index]) is not None:
         if issubclass(cls, PyNativeObject):
+            # Value-typed: the transient Object wrapper is discarded after
+            # __from_tvm_ffi_object__. No identity stability needed.
             obj = Object.__new__(Object)
             (<CObject>obj).chandle = result.v_obj
             return cls.__from_tvm_ffi_object__(cls, obj)
     else:
-        # Slow path: object is not found in registered entry
-        # In this case create a dummy stub class for future usage.
-        # For every unregistered class, this slow path will be triggered only once.
         cls = make_fallback_cls_for_type_index(type_index)
-    obj = cls.__new__(cls)
-    (<CObject>obj).chandle = result.v_obj
-    return obj
+    # Single choke point for the tying transition. Declared returning ``object``,
+    # so Cython adopts the owned reference and a NULL return raises.
+    return TVMFFIPyMakeRetObject(result.v_obj, <PyObject*>cls)
 
 
 cdef _get_method_from_method_info(const TVMFFIMethodInfo* method):
@@ -513,6 +532,7 @@ cdef _type_info_create_from_type_key(object type_cls, str type_key):
     cdef object c_default
     cdef object c_default_factory
     cdef object c_structural_eq
+    cdef object ty_schema
     cdef ByteArrayArg type_key_arg = ByteArrayArg(c_str(type_key))
 
     # NOTE: `type_key_arg` must be kept alive until after the call to `TVMFFITypeKeyToIndex`,
@@ -530,6 +550,8 @@ cdef _type_info_create_from_type_key(object type_cls, str type_key):
         (<FieldSetter>setter).offset = field.offset
         (<FieldSetter>setter).flags = field.flags
         metadata_obj = json.loads(bytearray_to_str(&field.metadata)) if field.metadata.size != 0 else {}
+        type_schema_json = metadata_obj.get("type_schema", None)
+        ty_schema = TypeSchema.from_json_str(type_schema_json) if type_schema_json is not None else None
         # Decode the static default value or factory (if any) registered by C++.
         has_default = (field.flags & kTVMFFIFieldFlagBitMaskHasDefault) != 0
         default_from_factory = (field.flags & kTVMFFIFieldFlagBitMaskDefaultFromFactory) != 0
@@ -555,11 +577,14 @@ cdef _type_info_create_from_type_key(object type_cls, str type_key):
                 name=bytearray_to_str(&field.name),
                 doc=bytearray_to_str(&field.doc) if field.doc.size != 0 else None,
                 size=field.size,
+                alignment=field.alignment,
                 offset=field.offset,
+                field_static_type_index=field.field_static_type_index,
                 frozen=(field.flags & kTVMFFIFieldFlagBitMaskWritable) == 0,
                 metadata=metadata_obj,
                 getter=getter,
                 setter=setter,
+                ty=ty_schema,
                 c_init=(field.flags & kTVMFFIFieldFlagBitMaskInitOff) == 0,
                 c_kw_only=(field.flags & kTVMFFIFieldFlagBitMaskKwOnly) != 0,
                 c_has_default=has_default,
@@ -611,12 +636,42 @@ cdef _update_registry(int type_index, object type_key, object type_info, object 
     TYPE_KEY_TO_INFO[type_key] = type_info
     if type_cls is not None:
         TYPE_CLS_TO_INFO[type_cls] = type_info
+    # Universal choke point for every registered FFI type (core
+    # _register_object_by_index, dynamic _register_py_class, and
+    # make_fallback_cls_for_type_index all funnel here): install the custom
+    # tp_alloc / tp_free that drive PyObject-tying. tp_alloc / tp_free are
+    # not inherited by dynamic subtypes, so each type must be patched here.
+    # No-op unless ``type_cls`` is a ``CObject`` subclass.
+    if type_cls is not None and isinstance(type_cls, type) and issubclass(type_cls, CObject):
+        TVMFFIPyInstallTypeSlots(<PyObject*>type_cls)
 
 
 def _register_object_by_index(int type_index, object type_cls):
     global TYPE_INDEX_TO_INFO, TYPE_KEY_TO_INFO, TYPE_INDEX_TO_CLS
     cdef str type_key = _type_index_to_key(type_index)
-    cdef object info = _type_info_create_from_type_key(type_cls, type_key)
+    cdef object info
+    cdef object existing_cls
+    # A type may be re-registered with a new Python class -- e.g. the enum binder binds several
+    # ``Enum`` subclasses to one cxx ``type_key``, and an object may be materialized (auto-creating
+    # a base-size fallback stub) before its real class is registered. Re-registration is rejected
+    # only when the new wrapper is LARGER than the one already registered: the cache-&-revive path
+    # (``TVMFFIPyTpAlloc``) memsets a cached wrapper block up to the CURRENT class's tp_basicsize, so
+    # reviving a block cached for a smaller old class as a larger new class would overflow it.
+    # Because every accepted re-registration is <= the previous one, the registered size is
+    # monotonically non-increasing and each cached block is always >= any later revival's memset,
+    # so no overflow is reachable. Same-or-smaller re-registration (all __slots__=() wrappers share
+    # the base size) is therefore safe.
+    if type_index < len(TYPE_INDEX_TO_CLS):
+        existing_cls = TYPE_INDEX_TO_CLS[type_index]
+        if (existing_cls is not None and type_cls is not None
+                and type_cls.__basicsize__ > existing_cls.__basicsize__):
+            raise ValueError(
+                f"Type '{type_key}' already has a registered class ({existing_cls!r}); "
+                f"re-registering it with the larger wrapper class {type_cls!r} is not supported. "
+                f"Register the class before any object of this type is materialized (which "
+                f"auto-creates a fallback)."
+            )
+    info = _type_info_create_from_type_key(type_cls, type_key)
     _update_registry(type_index, type_key, info, type_cls)
     return info
 
@@ -727,18 +782,33 @@ def _rollback_py_class(object type_info):
         TYPE_INDEX_TO_CLS[idx] = None
 
 
-def _lookup_type_attr(type_index: int32_t, attr_key: str) -> Any:
-    cdef ByteArrayArg attr_key_bytes = ByteArrayArg(c_str(attr_key))
-    cdef const TVMFFITypeAttrColumn* column = TVMFFIGetTypeAttrColumn(&attr_key_bytes.cdata)
+cdef object _lookup_type_attr_in_column(int32_t type_index, const TVMFFITypeAttrColumn* column):
     cdef TVMFFIAny data
     cdef int32_t offset
-    if column == NULL:
-        return None
     offset = type_index - column.begin_index
     if offset < 0 or offset >= column.size:
         return None
     CHECK_CALL(TVMFFIAnyViewToOwnedAny(&(column.data[offset]), &data))
     return make_ret(data)
+
+
+def _lookup_type_attr(type_index: int32_t, attr_key: str, ancestor: bool = False) -> Any:
+    cdef ByteArrayArg attr_key_bytes = ByteArrayArg(c_str(attr_key))
+    cdef const TVMFFITypeAttrColumn* column = TVMFFIGetTypeAttrColumn(&attr_key_bytes.cdata)
+    cdef const TVMFFITypeInfo* info
+    cdef object value
+    cdef int32_t i
+    if column == NULL:
+        return None
+    value = _lookup_type_attr_in_column(type_index, column)
+    if value is not None or not ancestor:
+        return value
+    info = TVMFFIGetTypeInfo(type_index)
+    for i in range(info.type_depth - 1, -1, -1):
+        value = _lookup_type_attr_in_column(info.type_ancestors[i].type_index, column)
+        if value is not None:
+            return value
+    return None
 
 
 def _register_type_attr(type_index: int32_t, attr_key: str, value: object) -> None:
@@ -770,6 +840,12 @@ def _register_type_attr(type_index: int32_t, attr_key: str, value: object) -> No
 
 def _type_cls_to_type_info(type_cls: type) -> TypeInfo | None:
     return TYPE_CLS_TO_INFO.get(type_cls, None)
+
+
+def _type_index_to_type_info(int type_index) -> TypeInfo | None:
+    if 0 <= type_index < len(TYPE_INDEX_TO_INFO):
+        return TYPE_INDEX_TO_INFO[type_index]
+    return None
 
 
 cdef list TYPE_INDEX_TO_CLS = []

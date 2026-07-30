@@ -88,7 +88,7 @@ runs:
 
     # ---- Build and test wheels ----
     - name: Build and test wheels
-      uses: pypa/cibuildwheel@298ed2fb2c105540f5ed055e8a6ad78d82dd3a7e  # v3.3.1
+      uses: pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55  # v4.1.0
       with:
         package-dir: addons/tvm_ffi_orcjit
         output-dir: wheelhouse
@@ -102,7 +102,11 @@ runs:
         CIBW_ENVIRONMENT: LLVM_PREFIX=/opt/llvm
         CIBW_ENVIRONMENT_WINDOWS: LLVM_PREFIX="C:/opt/llvm"
         CIBW_CONTAINER_ENGINE: "docker; create_args: --volume /opt/llvm:/opt/llvm"
-        CIBW_TEST_REQUIRES: pytest ninja
+        # Build against the in-tree core (not PyPI) so the addon's tvm_ffi ABI
+        # matches the core the tests reinstall; a mismatch segfaults the JIT.
+        CIBW_BEFORE_BUILD: pip install "scikit-build-core>=0.10.0" cmake ninja "{project}"
+        CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"
+        CIBW_TEST_REQUIRES: pytest pytest-xdist ninja
         CIBW_TEST_COMMAND: >-
           pip install --force-reinstall {project} &&
           pytest {project}/addons/tvm_ffi_orcjit/tests -v &&

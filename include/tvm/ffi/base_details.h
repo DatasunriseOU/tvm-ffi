@@ -114,6 +114,30 @@
 #define TVM_FFI_PREDICT_TRUE(cond) (cond)
 #endif
 
+/*!
+ * \brief Translates into __builtin_assume / __assume / __attribute__((assume)).
+ *
+ * Use ONLY when the external invariant guarantees cond. The compiler
+ * will remove all paths inconsistent with cond. This is not an
+ * assertion or check -- using on a wrong cond will result in
+ * undefined behavior. cond must be side-effect-free.
+ */
+#if defined(__clang__)
+#define TVM_FFI_UNSAFE_ASSUME(cond) __builtin_assume(cond)
+#elif defined(__GNUC__)
+// GCC does not reliably propagate __attribute__((assume(...))) through the
+// returned-aggregate/helper flows used in TVM_FFI hot paths. Lower to an
+// unreachable edge instead so GCC 11/14 recover the intended codegen.
+#define TVM_FFI_UNSAFE_ASSUME(cond)       \
+  do {                                    \
+    if (!(cond)) __builtin_unreachable(); \
+  } while (0)
+#elif defined(_MSC_VER)
+#define TVM_FFI_UNSAFE_ASSUME(cond) __assume(cond)
+#else
+#define TVM_FFI_UNSAFE_ASSUME(cond) static_cast<void>(0)
+#endif
+
 #define TVM_FFI_STR_CONCAT_(__x, __y) __x##__y
 #define TVM_FFI_STR_CONCAT(__x, __y) TVM_FFI_STR_CONCAT_(__x, __y)
 

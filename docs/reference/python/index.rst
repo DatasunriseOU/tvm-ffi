@@ -49,7 +49,6 @@ Tensor
   DLDeviceType
   device
 
-
 Function
 ~~~~~~~~
 .. autosummary::
@@ -75,6 +74,22 @@ Containers
 
   Array
   Map
+
+
+Structural
+----------
+.. autosummary::
+  :toctree: generated/
+
+  StructuralKey
+  StructuralVisitor
+  VisitInterrupt
+  WalkOrder
+  WalkResult
+  get_first_structural_mismatch
+  structural_equal
+  structural_hash
+  structural_walk
 
 
 Global Registry

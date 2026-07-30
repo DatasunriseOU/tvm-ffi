@@ -16,11 +16,11 @@
 # under the License.
 import dataclasses
 import json
+import sys
 import typing
 import collections.abc
 from functools import cached_property
 from typing import Optional, Any
-from io import StringIO
 
 try:
     from types import UnionType as _UnionType
@@ -116,6 +116,8 @@ _TYPE_SCHEMA_ORIGIN_CONVERTER = {
     "ObjectRValueRef": "Object",
 }
 
+cdef str _TYPE_ATTR_FFI_CONVERT_TYPE_SCHEMA = "__ffi_convert_type_schema__"
+
 # Sentinel for structural types (Optional, Union) that have no single type_index
 _ORIGIN_TYPE_INDEX_STRUCTURAL = -2
 # Sentinel for unknown/unresolved origins
@@ -204,6 +206,29 @@ class TypeSchema:
                 if tindex is not None:
                     self.origin_type_index = tindex
 
+    def is_subtype_of(self, target_cls: type) -> bool:
+        """Return whether this schema's origin is a subtype of ``target_cls``.
+
+        The check uses FFI object type metadata.  It returns ``False`` when
+        ``target_cls`` is not an FFI object class or when this schema has a
+        structural/POD origin instead of an object type index.
+        """
+        target_info = getattr(target_cls, "__tvm_ffi_type_info__", None)
+        target_type_index = None
+        if target_info is None:
+            try:
+                target_type_index = TypeSchema.from_annotation(target_cls).origin_type_index
+            except TypeError:
+                return False
+            if target_type_index == kTVMFFIObject:
+                return self.origin_type_index >= kTVMFFIStaticObjectBegin
+            return False
+        target_type_index = target_info.type_index
+        if self.origin_type_index == target_type_index:
+            return True
+        source_info = _type_index_to_type_info(self.origin_type_index)
+        return source_info is not None and target_type_index in source_info.type_ancestors
+
     @cached_property
     def _converter(self):
         """Lazily build the type converter on first use.
@@ -216,6 +241,19 @@ class TypeSchema:
 
     def __repr__(self) -> str:
         return self.repr(ty_map=None)
+
+    @staticmethod
+    def _from_maybe_json(raw: object) -> "TypeSchema":
+        """Construct a TypeSchema from a TypeSchema, JSON string, or JSON dict."""
+        if isinstance(raw, TypeSchema):
+            return raw
+        if isinstance(raw, str):
+            return TypeSchema.from_json_str(raw)
+        if isinstance(raw, dict):
+            return TypeSchema.from_json_obj(raw)
+        raise TypeError(
+            f"expected TypeSchema, JSON string, or JSON dict, got {type(raw).__name__}"
+        )
 
     @staticmethod
     def from_json_obj(obj: dict[str, Any]) -> "TypeSchema":
@@ -517,12 +555,40 @@ class TypeSchema:
             assert s.repr() == "Array[int]"
 
         """
-        if ty_map is None:
-            origin = self.origin
-        else:
-            origin = ty_map(self.origin)
+        return self.output_repr(ty_map)
+
+    def input_repr(self, ty_map: "Optional[Callable[[str], str]]" = None) -> str:
+        """Render the Python input annotation accepted by this schema."""
+        return self._repr_impl(ty_map, input_mode=True, expanded_convert_types=frozenset())
+
+    def output_repr(self, ty_map: "Optional[Callable[[str], str]]" = None) -> str:
+        """Render the precise Python output annotation produced by this schema."""
+        return self._repr_impl(ty_map, input_mode=False, expanded_convert_types=frozenset())
+
+    def _repr_impl(
+        self,
+        ty_map: "Optional[Callable[[str], str]]",
+        input_mode: bool,
+        expanded_convert_types: "frozenset[int]",
+    ) -> str:
+        if input_mode and self.origin_type_index >= kTVMFFIStaticObjectBegin:
+            if self.origin_type_index not in expanded_convert_types:
+                raw_convert_schema = _lookup_type_attr(
+                    self.origin_type_index, _TYPE_ATTR_FFI_CONVERT_TYPE_SCHEMA
+                )
+                if raw_convert_schema is not None:
+                    return TypeSchema._from_maybe_json(raw_convert_schema)._repr_impl(
+                        ty_map,
+                        input_mode=True,
+                        expanded_convert_types=expanded_convert_types | {self.origin_type_index},
+                    )
+
+        origin = self.origin if ty_map is None else ty_map(self.origin)
         schema_args = self.args
-        args = [i.repr(ty_map) for i in (() if schema_args is None else schema_args)]
+        args = [
+            i._repr_impl(ty_map, input_mode, expanded_convert_types)
+            for i in (() if schema_args is None else schema_args)
+        ]
         if origin == "Union":
             return " | ".join(args)
         elif origin == "Optional":
@@ -617,7 +683,9 @@ class TypeField:
     name: str
     doc: Optional[str]
     size: int
+    alignment: int
     offset: int
+    field_static_type_index: int
     frozen: bool
     metadata: dict[str, Any]
     getter: FieldGetter
@@ -649,24 +717,57 @@ class TypeField:
         assert self.setter is not None
         assert self.getter is not None
 
+    def _is_payload_enum_field(self) -> bool:
+        """Return True when this field targets a registered IntEnum/StrEnum class."""
+        if self.ty is None or self.ty.origin_type_index < kTVMFFIStaticObjectBegin:
+            return False
+        try:
+            cls = TYPE_INDEX_TO_CLS[self.ty.origin_type_index]
+        except (IndexError, NameError):
+            return False
+        if cls is None:
+            return False
+        for base in cls.__mro__:
+            if (
+                getattr(base, "__module__", None) == "tvm_ffi.dataclasses.enum"
+                and getattr(base, "__name__", None) in ("IntEnum", "StrEnum")
+            ):
+                return True
+        return False
+
+    def normalize_value(self, value):
+        """Normalize raw payloads for IntEnum/StrEnum fields; pass others through."""
+        if not self._is_payload_enum_field():
+            return value
+        return _to_py_class_value(self.ty.convert(value))
+
     def as_property(self, object cls):
         """Create an :class:`FFIProperty` descriptor for this field on ``cls``."""
         cdef str name = self.name
         cdef FieldGetter fget = self.getter
         cdef FieldSetter fset = self.setter
+        cdef object field = self
+        cdef object property_fset = fset
         cdef object ret
+        if self._is_payload_enum_field():
+            def normalized_fset(obj, value):
+                fset(obj, field.normalize_value(value))
+            property_fset = normalized_fset
         fget.__name__ = fset.__name__ = name
         fget.__module__ = fset.__module__ = cls.__module__
         fget.__qualname__ = fset.__qualname__ = f"{cls.__qualname__}.{name}"
+        property_fset.__name__ = name
+        property_fset.__module__ = cls.__module__
+        property_fset.__qualname__ = f"{cls.__qualname__}.{name}"
         ret = FFIProperty(
             fget=fget,
-            fset=fset,
+            fset=property_fset,
             frozen=self.frozen,
         )
         if self.doc:
             ret.__doc__ = self.doc
             fget.__doc__ = self.doc
-            fset.__doc__ = self.doc
+            property_fset.__doc__ = self.doc
         return ret
 
 
@@ -766,6 +867,12 @@ class TypeInfo:
             end = max(end, f.offset + f.size)
         return (end + 7) & ~7  # align to 8 bytes
 
+    @property
+    def _has_type_metadata(self) -> bool:
+        """Whether the registry publishes native size metadata for this type."""
+        cdef const TVMFFITypeInfo* c_info = TVMFFIGetTypeInfo(self.type_index)
+        return c_info != NULL and c_info.metadata != NULL
+
     def _register_fields(self, fields, structure_kind=None):
         """Register Field descriptors and set up __ffi_new__/__ffi_init__.
 
@@ -794,7 +901,7 @@ class TypeInfo:
 
         Each entry whose name is in *type_attr_names* is registered as a
         TypeAttrColumn entry (for C++ dispatch); the value need not be
-        callable (e.g. ``__ffi_ir_traits__``).  All other entries are
+        callable.  All other entries are
         registered as TypeMethod (for reflection introspection).
 
         Regardless, the full method list is always re-read from the C
@@ -852,6 +959,28 @@ _ORIGIN_NATIVE_LAYOUT = {
     "Optional": (16, 8, -1),
     "Union": (16, 8, -1),
 }
+
+
+cdef int64_t _get_subclass_offset(object type_info):
+    """Compute where C++ places a byte-aligned field in a direct subclass."""
+    cdef int64_t end
+    if type_info is None:
+        return sizeof(TVMFFIObject)
+    if sys.platform == "win32":
+        # The Microsoft C++ ABI does not reuse a base class's tail padding.
+        return type_info.total_size
+
+    # Itanium-family ABIs start derived fields at the unpadded end of the base.
+    # TypeInfo.fields contains only this type's own fields, so recurse through
+    # empty intermediate classes as well as ordinary inheritance.
+    if type_info.parent_type_info is None:
+        end = sizeof(TVMFFIObject)
+    else:
+        end = _get_subclass_offset(type_info.parent_type_info)
+    if type_info.fields is not None:
+        for field in type_info.fields:
+            end = max(end, field.offset + field.size)
+    return end
 
 cdef _register_one_field(
     int32_t type_index,
@@ -987,6 +1116,9 @@ cdef int _f_type_convert(void* type_converter, const TVMFFIAny* value, TVMFFIAny
         cany.cdata.type_index = kTVMFFINone
         cany.cdata.v_int64 = 0
         return 0
+    except _ConvertError as err:
+        set_last_ffi_error(TypeError(err.message))
+        return -1
     except Exception as err:
         set_last_ffi_error(err)
         return -1
@@ -1021,9 +1153,9 @@ def _register_fields(type_info, fields, structure_kind=None):
         The registered field descriptors.
     """
     cdef int32_t type_index = type_info.type_index
-    # Start field offsets AFTER all parent fields (not at fixed offset 24).
-    # This is critical for inheritance: child fields must not overlap parent memory.
-    cdef int64_t current_offset = type_info.parent_type_info.total_size
+    # C++ ABIs differ on whether a derived class can reuse parent tail padding.
+    # Derive the matching boundary from existing field offset/size metadata.
+    cdef int64_t current_offset = _get_subclass_offset(type_info.parent_type_info)
     cdef int64_t size, alignment
     cdef int32_t field_type_index
     cdef TVMFFIFieldGetter getter
@@ -1070,7 +1202,9 @@ def _register_fields(type_info, fields, structure_kind=None):
                 name=py_field.name,
                 doc=py_field.doc,
                 size=size,
+                alignment=alignment,
                 offset=field_offset,
+                field_static_type_index=field_type_index,
                 frozen=py_field.frozen,
                 metadata={"type_schema": py_field._ty_schema.to_json()},
                 getter=fgetter,
@@ -1121,7 +1255,7 @@ cdef _register_py_methods(int32_t type_index, list py_methods, frozenset type_at
     1. Convert the Python object to a ``TVMFFIAny``.
     2. If the name is in *type_attr_names*, register as TypeAttrColumn
        (for C++ dispatch via ``TypeAttrColumn``).  The value need not be
-       callable (e.g. ``__ffi_ir_traits__`` is an Object instance).
+       callable.
     3. Otherwise, register as TypeMethod (for reflection introspection
        via ``TypeInfo.methods``).
 
@@ -1129,8 +1263,8 @@ cdef _register_py_methods(int32_t type_index, list py_methods, frozenset type_at
     ----------
     type_index : int
         The runtime type index of the type.
-    py_methods : list[tuple[str, Any, bool]]
-        Each entry is ``(name, value, is_static)``.
+    py_methods : list[tuple[str, Any, bool, str | None]]
+        Each entry is ``(name, value, is_static, metadata_json)``.
     type_attr_names : frozenset[str]
         Names to register as TypeAttrColumn instead of TypeMethod.
     """
@@ -1139,11 +1273,12 @@ cdef _register_py_methods(int32_t type_index, list py_methods, frozenset type_at
     cdef TVMFFIAny sentinel_any
     cdef int c_api_ret_code
     cdef ByteArrayArg name_arg
+    cdef ByteArrayArg metadata_arg
 
     sentinel_any.type_index = kTVMFFINone
     sentinel_any.v_int64 = 0
 
-    for name, func, is_static in py_methods:
+    for name, func, is_static, metadata_json in py_methods:
         func_any.type_index = kTVMFFINone
         func_any.v_int64 = 0
         try:
@@ -1169,8 +1304,13 @@ cdef _register_py_methods(int32_t type_index, list py_methods, frozenset type_at
                 method_info.doc.size = 0
                 method_info.flags = kTVMFFIFieldFlagBitMaskIsStaticMethod if is_static else 0
                 method_info.method = func_any
-                method_info.metadata.data = NULL
-                method_info.metadata.size = 0
+                if metadata_json is not None:
+                    metadata_bytes = c_str(metadata_json)
+                    metadata_arg = ByteArrayArg(metadata_bytes)
+                    method_info.metadata = metadata_arg.cdata
+                else:
+                    method_info.metadata.data = NULL
+                    method_info.metadata.size = 0
                 CHECK_CALL(TVMFFITypeRegisterMethod(type_index, &method_info))
         finally:
             if func_any.type_index >= kTVMFFIStaticObjectBegin and func_any.v_obj != NULL:

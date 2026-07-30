@@ -392,13 +392,23 @@ cdef int TVMFFIPyArgSetterCUDADriverStreamFallback_(
     return 0
 
 
+cdef int TVMFFIPyArgSetterCDataType_(
+    TVMFFIPyArgSetter* handle, TVMFFIPyCallContext* ctx,
+    PyObject* arg, TVMFFIAny* out
+) except -1:
+    """Setter for the internal DataType helper."""
+    out.type_index = kTVMFFIDataType
+    out.v_dtype = (<DataType>arg).cdtype
+    return 0
+
+
 cdef int TVMFFIPyArgSetterDType_(
     TVMFFIPyArgSetter* handle, TVMFFIPyCallContext* ctx,
     PyObject* py_arg, TVMFFIAny* out
 ) except -1:
     """Setter for dtype"""
     cdef object arg = <object>py_arg
-    # dtype is a subclass of str, so this check occur before str
+    # tvm_ffi.dtype is a subclass of str, so this check occurs before str.
     arg = arg._tvm_ffi_dtype
     out.type_index = kTVMFFIDataType
     out.v_dtype = (<DataType>arg).cdtype
@@ -545,9 +555,13 @@ cdef int TVMFFIPyArgSetterObjectRValueRef_(
     PyObject* py_arg, TVMFFIAny* out
 ) except -1:
     """Setter for ObjectRValueRef"""
-    cdef object arg = <object>py_arg
+    cdef CObject src = (<object>py_arg).obj
+    # Eager-detach the canonical binding before passing the chandle by rvalue ref: the callee
+    # either moves it (src.chandle -> NULL) or leaves it, and either way ``src`` must no longer be
+    # the canonical wrapper. Recycling in both cases is handled in TVMFFIPyTpDealloc on src death.
+    TVMFFIPyCompareAndRebindPyObject(src.chandle, <PyObject*>src, NULL)
     out.type_index = kTVMFFIObjectRValueRef
-    out.v_ptr = &((<CObject>(arg.obj)).chandle)
+    out.v_ptr = &(src.chandle)
     return 0
 
 
@@ -817,9 +831,15 @@ cdef public int TVMFFICyArgSetterFactory(PyObject* value, TVMFFIPyArgSetter* out
         # because Real may not be exactly the float class
         out.func = TVMFFIPyArgSetterReal_
         return 0
+    if isinstance(arg, DataType):
+        out.func = TVMFFIPyArgSetterCDataType_
+        return 0
     # dtype is a subclass of str, so this check must occur before str
     if isinstance(arg, _CLASS_DTYPE):
         out.func = TVMFFIPyArgSetterDType_
+        return 0
+    if isinstance(arg, Device):
+        out.func = TVMFFIPyArgSetterDevice_
         return 0
     if isinstance(arg, _CLASS_DEVICE):
         out.func = TVMFFIPyArgSetterDevice_

@@ -87,6 +87,7 @@ variant subdirectories (c/, cc/, c-gcc/, etc.).
 | `test_funcs2` | More arithmetic (subtract, divide) |
 | `test_funcs_conflict` | Symbol conflict testing (duplicate `add`) |
 | `test_call_global` | Callbacks into Python-registered global functions |
+| `test_context` | First-lookup library-context injection |
 | `test_types` | Zero-arg, multi-arg, float, void return types |
 | `test_link_order_base` / `test_link_order_caller` | Cross-library symbol resolution |
 | `test_error` | Error propagation from JIT'd code |
@@ -105,5 +106,5 @@ static initialization and finalization:
 
 ## CI
 
-The CI workflow (`.github/workflows/tvm_ffi_orcjit.yml`) runs `pytest` and the
+The CI `orcjit` job (in `.github/workflows/ci_test.yml`) runs `pytest` and the
 quick-start example via `cibuildwheel`.

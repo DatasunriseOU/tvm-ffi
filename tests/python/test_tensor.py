@@ -30,6 +30,7 @@ except ImportError:
 
 import numpy as np
 import tvm_ffi
+from tvm_ffi.testing import run_with_gpu_lock
 
 
 def test_tensor_attributes() -> None:
@@ -39,12 +40,54 @@ def test_tensor_attributes() -> None:
     x = tvm_ffi.from_dlpack(data)
     assert isinstance(x, tvm_ffi.Tensor)
     assert x.shape == (10, 8, 4, 2)
+    assert x.ndim == 4
+    assert x.numel() == 640
+    assert x.size(0) == 10
+    assert x.size(-1) == 2
+    assert x.is_contiguous()
     assert x.strides == (64, 8, 2, 1)
     assert x.dtype == tvm_ffi.dtype("int16")
     assert x.device.dlpack_device_type() == tvm_ffi.DLDeviceType.kDLCPU
     assert x.device.index == 0
     x2 = np.from_dlpack(x)
     np.testing.assert_equal(x2, data)
+
+
+def test_tensor_data_ptr() -> None:
+    data = np.arange(8, dtype="int32")
+    tensor = tvm_ffi.from_dlpack(data)
+    assert tensor.data_ptr() == data.ctypes.data
+
+    view = data[2:]
+    tensor_view = tvm_ffi.from_dlpack(view)
+    assert tensor_view.data_ptr() == view.ctypes.data
+
+
+def test_empty_tensor_is_contiguous() -> None:
+    # Empty tensors are trivially contiguous regardless of what
+    # strides the producer reports (numpy 2.3+ via __dlpack__ now
+    # reports (0, 0, 0) for shape (4, 0, 4)). See PR #607 review
+    # comment for context.
+    data: npt.NDArray[Any] = np.zeros((4, 0, 4), dtype="int16")
+    if not hasattr(data, "__dlpack__"):
+        return
+    x = tvm_ffi.from_dlpack(data)
+    assert x.is_contiguous()
+
+
+def test_non_contiguous_tensor_attributes() -> None:
+    data: npt.NDArray[Any] = np.zeros((4, 4, 4), dtype="int16")
+    slice = data[1:3, :, 1:3]
+    if not hasattr(slice, "__dlpack__"):
+        return
+    x = tvm_ffi.from_dlpack(slice)
+    assert isinstance(x, tvm_ffi.Tensor)
+    assert x.shape == (2, 4, 2)
+    assert x.numel() == 16
+    assert x.size(0) == 2
+    assert x.size(-1) == 2
+    assert not x.is_contiguous()
+    assert x.strides == (16, 4, 1)
 
 
 def test_shape_object() -> None:
@@ -162,10 +205,14 @@ def test_tensor_from_pytorch_rocm() -> None:
     def _check_device(x: tvm_ffi.Tensor) -> str:
         return x.device.type
 
-    # PyTorch uses device name "cuda" to represent ROCm device
-    x = torch.randn(128, device="cuda")
-    device_type = tvm_ffi.get_global_func("testing.check_device")(x)
-    assert device_type == "rocm"
+    def run_and_check() -> None:
+        assert torch is not None
+        # PyTorch uses device name "cuda" to represent ROCm device
+        x = torch.randn(128, device="cuda")
+        device_type = tvm_ffi.get_global_func("testing.check_device")(x)
+        assert device_type == "rocm"
+
+    run_with_gpu_lock(run_and_check)
 
 
 def test_optional_tensor_view() -> None:

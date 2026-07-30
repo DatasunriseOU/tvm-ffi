@@ -50,7 +50,7 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
       - name: Set up uv
-        uses: astral-sh/setup-uv@5a095e7a2014a4212f075830d4f7277575a9d098  # v7.3.1
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
       - uses: ./.github/actions/detect-env-vars
         id: env_vars
       - name: Run clang-tidy
@@ -69,9 +69,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {os: ubuntu-latest, arch: x86_64, linux_image: manylinux2014, build_sdist: "true"}
-          - {os: ubuntu-latest, arch: x86_64, linux_image: manylinux_2_28, build_sdist: "false"}
-          - {os: ubuntu-24.04-arm, arch: aarch64, linux_image: manylinux2014, build_sdist: "false"}
+          - {os: ubuntu-latest, arch: x86_64, linux_image: manylinux_2_28, build_sdist: "true"}
           - {os: ubuntu-24.04-arm, arch: aarch64, linux_image: manylinux_2_28, build_sdist: "false"}
           - {os: windows-latest, arch: AMD64, linux_image: "", build_sdist: "false"}
           - {os: macos-14, arch: arm64, linux_image: "", build_sdist: "false"}
@@ -110,7 +108,7 @@ jobs:
           fetch-tags: true
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@5a095e7a2014a4212f075830d4f7277575a9d098  # v7.3.1
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
           python-version: ${{ matrix.python_version }}
           activate-environment: true

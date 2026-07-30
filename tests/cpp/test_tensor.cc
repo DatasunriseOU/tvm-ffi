@@ -49,6 +49,16 @@ int TestEnvTensorAllocatorError(DLTensor* prototype, TVMFFIObjectHandle* out) {
   return -1;
 }
 
+TEST(Tensor, GetDataSize) {
+  DLDataType uint1 = DLDataType({kDLUInt, 1, 1});
+  EXPECT_EQ(GetDataSize(1, uint1), 1);
+  EXPECT_EQ(GetDataSize(8, uint1), 1);
+  EXPECT_EQ(GetDataSize(9, uint1), 2);
+
+  DLDataType bool8 = DLDataType({kDLBool, 8, 1});
+  EXPECT_EQ(GetDataSize(9, bool8), 9);
+}
+
 TEST(Tensor, Basic) {
   Tensor nd = Empty({1, 2, 3}, DLDataType({kDLFloat, 32, 1}), DLDevice({kDLCPU, 0}));
   Shape shape = nd.shape();
@@ -89,6 +99,18 @@ TEST(Tensor, Basic) {
   EXPECT_EQ(strides3.size(), 2);
   EXPECT_EQ(strides3[0], 1);
   EXPECT_EQ(strides3[1], 2);
+}
+
+TEST(Tensor, EmptyTensorIsContiguous) {
+  // An empty tensor (any shape dim == 0) is trivially contiguous regardless of
+  // stride values.  This matches NumPy / PyTorch semantics.
+  // Use strides that would normally fail the contiguity check to verify the
+  // early-return path in IsContiguous().
+  Tensor nd =
+      EmptyStrided({4, 0, 4}, {0, 0, 0}, DLDataType({kDLInt, 16, 1}), DLDevice({kDLCPU, 0}));
+  EXPECT_EQ(nd.numel(), 0);
+  EXPECT_EQ(nd.IsContiguous(), true);
+  EXPECT_EQ(nd.is_contiguous(), true);
 }
 
 TEST(Tensor, DLPack) {
