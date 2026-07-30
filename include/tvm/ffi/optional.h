@@ -104,6 +104,9 @@ class Optional<T, std::enable_if_t<!TypeTraits<T>::storage_enabled>> {
 
   TVM_FFI_INLINE bool has_value() const noexcept { return data_.has_value(); }
 
+  /*! \brief Compatibility alias for legacy TVM code. */
+  TVM_FFI_INLINE bool defined() const noexcept { return has_value(); }
+
   TVM_FFI_INLINE bool operator==(const Optional& other) const { return data_ == other.data_; }
   TVM_FFI_INLINE bool operator!=(const Optional& other) const { return data_ != other.data_; }
   template <typename U>
@@ -221,6 +224,9 @@ class Optional<T, std::enable_if_t<TypeTraits<T>::storage_enabled>> {
   TVM_FFI_INLINE bool has_value() const noexcept {
     return data_.type_index() != TypeIndex::kTVMFFINone;
   }
+
+  /*! \brief Compatibility alias for legacy TVM code. */
+  TVM_FFI_INLINE bool defined() const noexcept { return has_value(); }
 
   /*!
    * \brief Try to reinterpret the stored value as a type U (strict, no conversion).
