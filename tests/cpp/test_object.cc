@@ -253,9 +253,15 @@ TEST(ObjectRef, AsUsesTypeTraitsCheckAnyStrict) {
 TEST(ObjectRef, GetRefUsesObjectRefContainment) {
   ObjectPtr<TIntObj> int_object = make_object<TIntObj>(10);
   TIntOrFloatRef int_or_float = GetRef<TIntOrFloatRef>(int_object.get());
+  Optional<TInt> optional_int = GetRef<Optional<TInt>>(int_object.get());
+  const TIntObj* null_int_object = nullptr;
+  Optional<TInt> empty_int = GetRef<Optional<TInt>>(null_int_object);
 
   ASSERT_NE(int_or_float.as<TIntObj>(), nullptr);
   EXPECT_EQ(int_or_float.as<TIntObj>()->value, 10);
+  ASSERT_TRUE(optional_int.has_value());
+  EXPECT_EQ((*optional_int).get(), int_object.get());
+  EXPECT_FALSE(empty_int.has_value());
 }
 
 TEST(ObjectRef, AsOrThrow) {

@@ -163,6 +163,24 @@ class Optional<T, std::enable_if_t<TypeTraits<T>::storage_enabled>> {
   Optional(const Optional& other) = default;
   /*! \brief move constructor. */
   Optional(Optional&& other) noexcept = default;
+  /*! \brief safely upcast an Optional ObjectRef value. */
+  template <typename U,
+            typename = std::enable_if_t<!std::is_same_v<T, U> && std::is_base_of_v<ObjectRef, T> &&
+                                        std::is_base_of_v<T, U>>>
+  Optional(const Optional<U>& other) {
+    if (other.has_value()) {
+      data_ = Any(T(other.value()));
+    }
+  }
+  /*! \brief safely move-upcast an Optional ObjectRef value. */
+  template <typename U,
+            typename = std::enable_if_t<!std::is_same_v<T, U> && std::is_base_of_v<ObjectRef, T> &&
+                                        std::is_base_of_v<T, U>>>
+  Optional(Optional<U>&& other) {
+    if (other.has_value()) {
+      data_ = Any(T(std::move(other).value()));
+    }
+  }
   /*! \brief construct from a value of type T (copy). */
   Optional(const T& value) : data_(value) {}
   /*! \brief construct from a value of type T (move). */
@@ -179,6 +197,32 @@ class Optional<T, std::enable_if_t<TypeTraits<T>::storage_enabled>> {
   Optional& operator=(const Optional& other) = default;
   /*! \brief move assignment. */
   Optional& operator=(Optional&& other) noexcept = default;
+
+  /*! \brief safely upcast-assign an Optional ObjectRef value. */
+  template <typename U,
+            typename = std::enable_if_t<!std::is_same_v<T, U> && std::is_base_of_v<ObjectRef, T> &&
+                                        std::is_base_of_v<T, U>>>
+  Optional& operator=(const Optional<U>& other) {
+    if (other.has_value()) {
+      data_ = Any(T(other.value()));
+    } else {
+      data_.reset();
+    }
+    return *this;
+  }
+
+  /*! \brief safely move-upcast-assign an Optional ObjectRef value. */
+  template <typename U,
+            typename = std::enable_if_t<!std::is_same_v<T, U> && std::is_base_of_v<ObjectRef, T> &&
+                                        std::is_base_of_v<T, U>>>
+  Optional& operator=(Optional<U>&& other) {
+    if (other.has_value()) {
+      data_ = Any(T(std::move(other).value()));
+    } else {
+      data_.reset();
+    }
+    return *this;
+  }
 
   TVM_FFI_INLINE Optional& operator=(T other) {
     data_ = Any(std::move(other));
@@ -227,6 +271,24 @@ class Optional<T, std::enable_if_t<TypeTraits<T>::storage_enabled>> {
 
   /*! \brief Compatibility alias for legacy TVM code. */
   TVM_FFI_INLINE bool defined() const noexcept { return has_value(); }
+
+  /*!
+   * \brief Return the contained ObjectRef's raw object pointer.
+   * \note This compatibility accessor is available only for ObjectRef types.
+   */
+  template <typename U = T, typename = std::enable_if_t<std::is_base_of_v<ObjectRef, U>>>
+  TVM_FFI_INLINE const typename U::ContainerType* get() const {
+    return has_value() ? operator*().get() : nullptr;
+  }
+
+  /*!
+   * \brief Access the contained ObjectRef through its object pointer.
+   * \note This restores the legacy ObjectRef-backed Optional access surface.
+   */
+  template <typename U = T, typename = std::enable_if_t<std::is_base_of_v<ObjectRef, U>>>
+  TVM_FFI_INLINE const typename U::ContainerType* operator->() const {
+    return get<U>();
+  }
 
   /*!
    * \brief Try to reinterpret the stored value as a type U (strict, no conversion).

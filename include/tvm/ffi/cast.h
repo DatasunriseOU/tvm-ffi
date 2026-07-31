@@ -32,6 +32,16 @@
 namespace tvm {
 namespace ffi {
 
+namespace details {
+template <typename T>
+struct OptionalValueType;
+
+template <typename T>
+struct OptionalValueType<Optional<T>> {
+  using type = T;
+};
+}  // namespace details
+
 /*!
  * \brief Get a reference type from a raw object ptr type
  *
@@ -46,8 +56,14 @@ namespace ffi {
  */
 template <typename RefType, typename ObjectType>
 inline RefType GetRef(const ObjectType* ptr) {
-  if constexpr (object_ref_contains_v<RefType, ObjectType>) {
-    if constexpr (is_optional_type_v<RefType> || RefType::_type_is_nullable) {
+  if constexpr (is_optional_type_v<RefType>) {
+    using ValueType = typename details::OptionalValueType<RefType>::type;
+    if (ptr == nullptr) {
+      return std::nullopt;
+    }
+    return RefType(GetRef<ValueType>(ptr));
+  } else if constexpr (object_ref_contains_v<RefType, ObjectType>) {
+    if constexpr (RefType::_type_is_nullable) {
       if (ptr == nullptr) {
         return details::ObjectUnsafe::ObjectRefFromObjectPtr<RefType>(nullptr);
       }
