@@ -87,6 +87,21 @@ class TVMFFIPyWithAttachedThreadState {
   PyGILState_STATE gstate_;
 };
 
+// Exception-safe counterpart to Py_BEGIN_ALLOW_THREADS/Py_END_ALLOW_THREADS.
+// PyEval_RestoreThread must run before a propagated C++ exception reaches code
+// that touches the Python C API.
+class TVMFFIPyReleaseThreadState {
+ public:
+  TVMFFIPyReleaseThreadState() noexcept : thread_state_(PyEval_SaveThread()) {}
+  ~TVMFFIPyReleaseThreadState() noexcept { PyEval_RestoreThread(thread_state_); }
+
+  TVMFFIPyReleaseThreadState(const TVMFFIPyReleaseThreadState&) = delete;
+  TVMFFIPyReleaseThreadState& operator=(const TVMFFIPyReleaseThreadState&) = delete;
+
+ private:
+  PyThreadState* thread_state_;
+};
+
 /*!
  * \brief Closure state carried as the resource handle for an FFI function that
  *        wraps a Python callable and optional exchange api for tensor handling.
@@ -504,10 +519,8 @@ class TVMFFIPyCallManager {
       }
       // call the function
       if (release_gil) {
-        // release the GIL
-        Py_BEGIN_ALLOW_THREADS;
+        TVMFFIPyReleaseThreadState release_thread_state;
         c_api_ret_code[0] = TVMFFIFunctionCall(func_handle, ctx.packed_args, num_args, result);
-        Py_END_ALLOW_THREADS;
       } else {
         c_api_ret_code[0] = TVMFFIFunctionCall(func_handle, ctx.packed_args, num_args, result);
       }

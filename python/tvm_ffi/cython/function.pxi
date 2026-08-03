@@ -1166,6 +1166,31 @@ def _testing_drop_last_ref_without_thread_state() -> None:
     TVMFFITestingCallDeleterWithoutThreadState(<void*>py_obj)
 
 
+cdef extern from *:
+    """
+    #include <stdexcept>
+    #include <tvm/ffi/function.h>
+
+    static int TVMFFITestingEscapingSafeCall(void*, const TVMFFIAny*, int32_t, TVMFFIAny*) {
+      throw std::runtime_error("testing C++ exception escaped TVMFFIFunctionCall");
+    }
+
+    static int TVMFFITestingCallEscapingException(PyObject* py_args) {
+      tvm::ffi::details::ExternCFunctionObjNullHandleImpl function(TVMFFITestingEscapingSafeCall);
+      TVMFFIAny result{};
+      int c_api_ret_code = 0;
+      return TVMFFIPyFuncCall(&function, py_args, &result, &c_api_ret_code, true, nullptr);
+    }
+    """
+    int TVMFFITestingCallEscapingException(PyObject* py_args) except -1
+
+
+def _testing_call_escaping_exception() -> None:
+    """Exercise the Python FFI cleanup path for an escaping C++ exception."""
+    cdef tuple py_args = ()
+    TVMFFITestingCallEscapingException(<PyObject*>py_args)
+
+
 def _print_debug_info() -> None:
     """Get the size of the arg dispatch map"""
     cdef size_t size = TVMFFIPyGetArgDispatchMapSize()
