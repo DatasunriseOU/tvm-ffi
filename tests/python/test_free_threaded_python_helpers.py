@@ -26,6 +26,14 @@ def _is_free_threaded_python() -> bool:
     return hasattr(sys, "_is_gil_enabled") and not sys._is_gil_enabled()
 
 
+def test_released_thread_state_restored_before_cpp_exception() -> None:
+    call_escaping_exception = getattr(tvm_ffi.core, "_testing_call_escaping_exception")
+    with pytest.raises(
+        RuntimeError, match="testing C\\+\\+ exception escaped released-thread-state"
+    ):
+        call_escaping_exception()
+
+
 @pytest.mark.skipif(not _is_free_threaded_python(), reason="requires free-threaded Python")
 def test_pyobject_deleter_handles_last_ref() -> None:
     drop_last_ref = getattr(tvm_ffi.core, "_testing_drop_last_ref_without_thread_state")

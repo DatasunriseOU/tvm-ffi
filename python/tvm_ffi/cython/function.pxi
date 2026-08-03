@@ -1166,6 +1166,29 @@ def _testing_drop_last_ref_without_thread_state() -> None:
     TVMFFITestingCallDeleterWithoutThreadState(<void*>py_obj)
 
 
+cdef extern from *:
+    """
+    #include <stdexcept>
+
+    static int TVMFFITestingCallEscapingException() {
+      try {
+        return TVMFFIPyCallWithReleasedThreadState([]() -> int {
+          throw std::runtime_error("testing C++ exception escaped released-thread-state call");
+        });
+      } catch (const std::exception& ex) {
+        PyErr_SetString(PyExc_RuntimeError, ex.what());
+        return -1;
+      }
+    }
+    """
+    int TVMFFITestingCallEscapingException() except -1
+
+
+def _testing_call_escaping_exception() -> None:
+    """Exercise released-thread-state cleanup during C++ exception unwind."""
+    TVMFFITestingCallEscapingException()
+
+
 def _print_debug_info() -> None:
     """Get the size of the arg dispatch map"""
     cdef size_t size = TVMFFIPyGetArgDispatchMapSize()
