@@ -102,6 +102,12 @@ class TVMFFIPyReleaseThreadState {
   PyThreadState* thread_state_;
 };
 
+template <typename F>
+TVM_FFI_INLINE auto TVMFFIPyCallWithReleasedThreadState(F&& f) -> decltype(f()) {
+  TVMFFIPyReleaseThreadState release_thread_state;
+  return f();
+}
+
 /*!
  * \brief Closure state carried as the resource handle for an FFI function that
  *        wraps a Python callable and optional exchange api for tensor handling.
@@ -519,8 +525,8 @@ class TVMFFIPyCallManager {
       }
       // call the function
       if (release_gil) {
-        TVMFFIPyReleaseThreadState release_thread_state;
-        c_api_ret_code[0] = TVMFFIFunctionCall(func_handle, ctx.packed_args, num_args, result);
+        c_api_ret_code[0] = TVMFFIPyCallWithReleasedThreadState(
+            [&]() { return TVMFFIFunctionCall(func_handle, ctx.packed_args, num_args, result); });
       } else {
         c_api_ret_code[0] = TVMFFIFunctionCall(func_handle, ctx.packed_args, num_args, result);
       }

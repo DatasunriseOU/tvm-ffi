@@ -1169,26 +1169,24 @@ def _testing_drop_last_ref_without_thread_state() -> None:
 cdef extern from *:
     """
     #include <stdexcept>
-    #include <tvm/ffi/function.h>
 
-    static int TVMFFITestingEscapingSafeCall(void*, const TVMFFIAny*, int32_t, TVMFFIAny*) {
-      throw std::runtime_error("testing C++ exception escaped TVMFFIFunctionCall");
-    }
-
-    static int TVMFFITestingCallEscapingException(PyObject* py_args) {
-      tvm::ffi::details::ExternCFunctionObjNullHandleImpl function(TVMFFITestingEscapingSafeCall);
-      TVMFFIAny result{};
-      int c_api_ret_code = 0;
-      return TVMFFIPyFuncCall(&function, py_args, &result, &c_api_ret_code, true, nullptr);
+    static int TVMFFITestingCallEscapingException() {
+      try {
+        return TVMFFIPyCallWithReleasedThreadState([]() -> int {
+          throw std::runtime_error("testing C++ exception escaped released-thread-state call");
+        });
+      } catch (const std::exception& ex) {
+        PyErr_SetString(PyExc_RuntimeError, ex.what());
+        return -1;
+      }
     }
     """
-    int TVMFFITestingCallEscapingException(PyObject* py_args) except -1
+    int TVMFFITestingCallEscapingException() except -1
 
 
 def _testing_call_escaping_exception() -> None:
-    """Exercise the Python FFI cleanup path for an escaping C++ exception."""
-    cdef tuple py_args = ()
-    TVMFFITestingCallEscapingException(<PyObject*>py_args)
+    """Exercise released-thread-state cleanup during C++ exception unwind."""
+    TVMFFITestingCallEscapingException()
 
 
 def _print_debug_info() -> None:

@@ -26,9 +26,11 @@ def _is_free_threaded_python() -> bool:
     return hasattr(sys, "_is_gil_enabled") and not sys._is_gil_enabled()
 
 
-def test_func_call_restores_thread_state_before_cpp_exception() -> None:
+def test_released_thread_state_restored_before_cpp_exception() -> None:
     call_escaping_exception = getattr(tvm_ffi.core, "_testing_call_escaping_exception")
-    with pytest.raises(RuntimeError, match="testing C\\+\\+ exception escaped"):
+    with pytest.raises(
+        RuntimeError, match="testing C\\+\\+ exception escaped released-thread-state"
+    ):
         call_escaping_exception()
 
 
